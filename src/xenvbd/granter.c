@@ -128,6 +128,7 @@ GranterReleaseLock(
 
     ASSERT3U(KeGetCurrentIrql(), ==, DISPATCH_LEVEL);
 
+#pragma prefast(disable:26110)
     KeReleaseSpinLockFromDpcLevel(&Granter->Lock);
 }
 
@@ -146,6 +147,11 @@ GranterConnect(
     ASSERT(Granter->Connected == FALSE);
 
     Granter->GnttabInterface = FdoAcquireGnttab(Fdo);
+
+    status = STATUS_UNSUCCESSFUL;
+    if (Granter->GnttabInterface == NULL)
+        goto fail1;
+
     Granter->BackendDomain = BackendDomain;
 
     status = RtlStringCbPrintfA(Name,
@@ -153,31 +159,30 @@ GranterConnect(
                                 "disk_%u",
                                 FrontendGetTargetId(Granter->Frontend));
     if (!NT_SUCCESS(status))
-        goto fail1;
+        goto fail2;
 
     KeInitializeSpinLock(&Granter->Lock);
 
-    status = GNTTAB(CreateCache,
-                    Granter->GnttabInterface,
-                    Name,
-                    0,
-                    GranterAcquireLock,
-                    GranterReleaseLock,
-                    Granter,
-                    &Granter->Cache);
+    status = XENBUS_GNTTAB(CreateCache,
+                           Granter->GnttabInterface,
+                           Name,
+                           0,
+                           GranterAcquireLock,
+                           GranterReleaseLock,
+                           Granter,
+                           &Granter->Cache);
     if (!NT_SUCCESS(status))
-        goto fail2;
+        goto fail3;
 
     Granter->Connected = TRUE;
     return STATUS_SUCCESS;
 
+fail3:
 fail2:
-fail1:
-    GNTTAB(Release, Granter->GnttabInterface);
-    Granter->GnttabInterface = NULL;
-
     Granter->BackendDomain = 0;
-
+    XENBUS_GNTTAB(Release, Granter->GnttabInterface);
+    Granter->GnttabInterface = NULL;
+fail1:
     return status;
 }
 
@@ -225,12 +230,12 @@ GranterDisconnect(
     ASSERT3S(Granter->Current, ==, 0);
     Granter->Maximum = 0;
 
-    GNTTAB(DestroyCache,
-           Granter->GnttabInterface,
-           Granter->Cache);
+    XENBUS_GNTTAB(DestroyCache,
+                  Granter->GnttabInterface,
+                  Granter->Cache);
     Granter->Cache = NULL;
 
-    GNTTAB(Release, Granter->GnttabInterface);
+    XENBUS_GNTTAB(Release, Granter->GnttabInterface);
     Granter->GnttabInterface = NULL;
 
     Granter->BackendDomain = 0;
@@ -244,14 +249,14 @@ GranterDebugCallback(
     IN  PXENBUS_DEBUG_CALLBACK      Callback
     )
 {
-    DEBUG(Printf, Debug, Callback,
-        "GRANTER: %s %s\n", 
-        Granter->Connected ? "CONNECTED" : "DISCONNECTED",
-        Granter->Enabled ? "ENABLED" : "DISABLED");
-    DEBUG(Printf, Debug, Callback,
-        "GRANTER: %d / %d\n",
-        Granter->Current,
-        Granter->Maximum);
+    XENBUS_DEBUG(Printf, Debug, Callback,
+                 "GRANTER: %s %s\n", 
+                 Granter->Connected ? "CONNECTED" : "DISCONNECTED",
+                 Granter->Enabled ? "ENABLED" : "DISABLED");
+    XENBUS_DEBUG(Printf, Debug, Callback,
+                 "GRANTER: %d / %d\n",
+                 Granter->Current,
+                 Granter->Maximum);
     Granter->Maximum = Granter->Current;
 }
 
@@ -271,14 +276,14 @@ GranterGet(
     if (Granter->Connected == FALSE)
         goto fail1;
 
-    status = GNTTAB(PermitForeignAccess, 
-                    Granter->GnttabInterface, 
-                    Granter->Cache,
-                    FALSE,
-                    Granter->BackendDomain,
-                    Pfn,
-                    ReadOnly,
-                    &Descriptor);
+    status = XENBUS_GNTTAB(PermitForeignAccess, 
+                           Granter->GnttabInterface, 
+                           Granter->Cache,
+                           FALSE,
+                           Granter->BackendDomain,
+                           Pfn,
+                           ReadOnly,
+                           &Descriptor);
     if (!NT_SUCCESS(status))
         goto fail2;
     
@@ -306,11 +311,11 @@ GranterPut(
     if (Granter->Connected == FALSE)
         return;
 
-    status = GNTTAB(RevokeForeignAccess,
-                    Granter->GnttabInterface,
-                    Granter->Cache,
-                    FALSE,
-                    Descriptor);
+    status = XENBUS_GNTTAB(RevokeForeignAccess,
+                           Granter->GnttabInterface,
+                           Granter->Cache,
+                           FALSE,
+                           Descriptor);
     ASSERT(NT_SUCCESS(status));
 
     InterlockedDecrement(&Granter->Current);
@@ -327,5 +332,7 @@ GranterReference(
     if (Granter->Connected == FALSE)
         return 0;
 
-    return GNTTAB(Reference, Granter->GnttabInterface, Descriptor);
+    return XENBUS_GNTTAB(GetReference,
+                         Granter->GnttabInterface,
+                         Descriptor);
 }

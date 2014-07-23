@@ -32,74 +32,85 @@
 #ifndef _XENFILT_EMULATED_INTERFACE_H
 #define _XENFILT_EMULATED_INTERFACE_H
 
-#define DEFINE_EMULATED_OPERATIONS                                      \
-        EMULATED_OPERATION(VOID,                                        \
-                           Acquire,                                     \
-                           (                                            \
-                           IN  PXENFILT_EMULATED_CONTEXT Context        \
-                           )                                            \
-                           )                                            \
-        EMULATED_OPERATION(VOID,                                        \
-                           Release,                                     \
-                           (                                            \
-                           IN  PXENFILT_EMULATED_CONTEXT Context        \
-                           )                                            \
-                           )                                            \
-        EMULATED_OPERATION(BOOLEAN,                                     \
-                           IsDevicePresent,                             \
-                           (                                            \
-                           IN  PXENFILT_EMULATED_CONTEXT Context,       \
-                           IN  PCHAR                     DeviceID,      \
-                           IN  PCHAR                     InstanceID     \
-                           )                                            \
-                           )                                            \
-        EMULATED_OPERATION(BOOLEAN,                                     \
-                           IsDiskPresent,                               \
-                           (                                            \
-                           IN  PXENFILT_EMULATED_CONTEXT Context,       \
-                           IN  ULONG                     Controller,    \
-                           IN  ULONG                     Target,        \
-                           IN  ULONG                     Lun            \
-                           )                                            \
-                           )
+#ifndef _WINDLL
 
-typedef struct _XENFILT_EMULATED_CONTEXT    XENFILT_EMULATED_CONTEXT, *PXENFILT_EMULATED_CONTEXT;
+typedef enum _XENFILT_EMULATED_OBJECT_TYPE {
+    XENFILT_EMULATED_OBJECT_TYPE_INVALID = 0,
+    XENFILT_EMULATED_OBJECT_TYPE_DEVICE,
+    XENFILT_EMULATED_OBJECT_TYPE_DISK
+} XENFILT_EMULATED_OBJECT_TYPE, *PXENFILT_EMULATED_OBJECT_TYPE;
 
-#define EMULATED_OPERATION(_Type, _Name, _Arguments) \
-        _Type (*EMULATED_ ## _Name) _Arguments;
+typedef struct _XENFILT_EMULATED_OBJECT XENFILT_EMULATED_OBJECT, *PXENFILT_EMULATED_OBJECT;
 
-typedef struct _XENFILT_EMULATED_OPERATIONS {
-    DEFINE_EMULATED_OPERATIONS
-} XENFILT_EMULATED_OPERATIONS, *PXENFILT_EMULATED_OPERATIONS;
+typedef NTSTATUS
+(*XENFILT_EMULATED_ACQUIRE)(
+    IN  PINTERFACE  Interface
+    );
 
-#undef EMULATED_OPERATION
+typedef VOID
+(*XENFILT_EMULATED_RELEASE)(
+    IN  PINTERFACE  Interface
+    );
 
-typedef struct _XENFILT_EMULATED_INTERFACE   XENFILT_EMULATED_INTERFACE, *PXENFILT_EMULATED_INTERFACE;
+typedef BOOLEAN
+(*XENFILT_EMULATED_IS_DEVICE_PRESENT)(
+    IN  PVOID   Context,
+    IN  PCHAR   DeviceID,
+    IN  PCHAR   InstanceID
+    );
 
-// {062AAC96-2BF8-4A69-AD6B-154CF051E977}
-DEFINE_GUID(GUID_EMULATED_INTERFACE, 
-            0x62aac96,
-            0x2bf8,
-            0x4a69,
-            0xad,
-            0x6b,
-            0x15,
-            0x4c,
-            0xf0,
-            0x51,
-            0xe9,
-            0x77);
+typedef BOOLEAN
+(*XENFILT_EMULATED_IS_DISK_PRESENT)(
+    IN  PVOID   Context,
+    IN  ULONG   Controller,
+    IN  ULONG   Target,
+    IN  ULONG   Lun
+    );
 
-#define EMULATED_INTERFACE_VERSION    4
+typedef NTSTATUS
+(*XENFILT_EMULATED_ADD_OBJECT)(
+    IN  PINTERFACE                      Interface,
+    IN  XENFILT_EMULATED_OBJECT_TYPE    Type,
+    IN  PDEVICE_OBJECT                  DeviceObject,
+    OUT PXENFILT_EMULATED_OBJECT        *EmulatedObject
+    );
 
-#define EMULATED_OPERATIONS(_Interface) \
-        (PXENFILT_EMULATED_OPERATIONS *)((ULONG_PTR)(_Interface))
+typedef VOID
+(*XENFILT_EMULATED_REMOVE_OBJECT)(
+    IN  PINTERFACE                  Interface,
+    IN  PXENFILT_EMULATED_OBJECT    EmulatedObject
+    );
 
-#define EMULATED_CONTEXT(_Interface) \
-        (PXENFILT_EMULATED_CONTEXT *)((ULONG_PTR)(_Interface) + sizeof (PVOID))
+typedef const CHAR *
+(*XENFILT_EMULATED_GET_TEXT)(
+    IN  PINTERFACE                  Interface,
+    IN  PXENFILT_EMULATED_OBJECT    EmulatedObject
+    );
 
-#define EMULATED(_Operation, _Interface, ...) \
-        (*EMULATED_OPERATIONS(_Interface))->EMULATED_ ## _Operation((*EMULATED_CONTEXT(_Interface)), __VA_ARGS__)
+// {959027A1-FCCE-4E78-BCF4-637384F499C5}
+DEFINE_GUID(GUID_XENFILT_EMULATED_INTERFACE, 
+0x959027a1, 0xfcce, 0x4e78, 0xbc, 0xf4, 0x63, 0x73, 0x84, 0xf4, 0x99, 0xc5);
+
+struct _XENFILT_EMULATED_INTERFACE_V1 {
+    INTERFACE                           Interface;
+    XENFILT_EMULATED_ACQUIRE            EmulatedAcquire;
+    XENFILT_EMULATED_RELEASE            EmulatedRelease;
+    XENFILT_EMULATED_IS_DEVICE_PRESENT  EmulatedIsDevicePresent;
+    XENFILT_EMULATED_IS_DISK_PRESENT    EmulatedIsDiskPresent;
+    XENFILT_EMULATED_ADD_OBJECT         EmulatedAddObject;
+    XENFILT_EMULATED_REMOVE_OBJECT      EmulatedRemoveObject;
+    XENFILT_EMULATED_GET_TEXT           EmulatedGetText;
+};
+
+typedef struct _XENFILT_EMULATED_INTERFACE_V1 XENFILT_EMULATED_INTERFACE, *PXENFILT_EMULATED_INTERFACE;
+
+#define XENFILT_EMULATED(_Method, _Interface, ...)    \
+    (_Interface)->Emulated ## _Method((PINTERFACE)(_Interface), __VA_ARGS__)
+
+#endif  // _WINDLL
+
+#define XENFILT_EMULATED_INTERFACE_VERSION_MIN  1
+#define XENFILT_EMULATED_INTERFACE_VERSION_MAX  1
 
 #endif  // _XENFILT_EMULATED_INTERFACE_H
 

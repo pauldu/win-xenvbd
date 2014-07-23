@@ -32,6 +32,8 @@
 #ifndef _XENBUS_SUSPEND_INTERFACE_H
 #define _XENBUS_SUSPEND_INTERFACE_H
 
+#ifndef _WINDLL
+
 typedef enum _XENBUS_SUSPEND_CALLBACK_TYPE {
     SUSPEND_CALLBACK_TYPE_INVALID = 0,
     SUSPEND_CALLBACK_EARLY,
@@ -40,81 +42,64 @@ typedef enum _XENBUS_SUSPEND_CALLBACK_TYPE {
 
 typedef struct _XENBUS_SUSPEND_CALLBACK   XENBUS_SUSPEND_CALLBACK, *PXENBUS_SUSPEND_CALLBACK;
 
-#define DEFINE_SUSPEND_OPERATIONS                                                   \
-        SUSPEND_OPERATION(VOID,                                                     \
-                          Acquire,                                                  \
-                          (                                                         \
-                          IN  PXENBUS_SUSPEND_CONTEXT  Context                      \
-                          )                                                         \
-                          )                                                         \
-        SUSPEND_OPERATION(VOID,                                                     \
-                          Release,                                                  \
-                          (                                                         \
-                          IN  PXENBUS_SUSPEND_CONTEXT  Context                      \
-                          )                                                         \
-                          )                                                         \
-        SUSPEND_OPERATION(NTSTATUS,                                                 \
-                          Register,                                                 \
-                          (                                                         \
-                          IN  PXENBUS_SUSPEND_CONTEXT      Context,                 \
-                          IN  XENBUS_SUSPEND_CALLBACK_TYPE Type,                    \
-                          IN  VOID                         (*Function)(PVOID),      \
-                          IN  PVOID                        Argument OPTIONAL,       \
-                          OUT PXENBUS_SUSPEND_CALLBACK     *Callback                \
-                          )                                                         \
-                          )                                                         \
-        SUSPEND_OPERATION(VOID,                                                     \
-                          Deregister,                                               \
-                          (                                                         \
-                          IN  PXENBUS_SUSPEND_CONTEXT  Context,                     \
-                          IN  PXENBUS_SUSPEND_CALLBACK Callback                     \
-                          )                                                         \
-                          )                                                         \
-        SUSPEND_OPERATION(ULONG,                                                    \
-                          Count,                                                    \
-                          (                                                         \
-                          IN  PXENBUS_SUSPEND_CONTEXT  Context                      \
-                          )                                                         \
-                          )
+typedef NTSTATUS
+(*XENBUS_SUSPEND_ACQUIRE)(
+    IN  PINTERFACE  Interface
+    );
 
-typedef struct _XENBUS_SUSPEND_CONTEXT  XENBUS_SUSPEND_CONTEXT, *PXENBUS_SUSPEND_CONTEXT;
+typedef VOID
+(*XENBUS_SUSPEND_RELEASE)(
+    IN  PINTERFACE  Interface
+    );
 
-#define SUSPEND_OPERATION(_Type, _Name, _Arguments) \
-        _Type (*SUSPEND_ ## _Name) _Arguments;
+typedef NTSTATUS
+(*XENBUS_SUSPEND_REGISTER)(
+    IN  PINTERFACE                      Interface,
+    IN  XENBUS_SUSPEND_CALLBACK_TYPE    Type,
+    IN  VOID                            (*Function)(PVOID),
+    IN  PVOID                           Argument OPTIONAL,
+    OUT PXENBUS_SUSPEND_CALLBACK        *Callback
+    );
 
-typedef struct _XENBUS_SUSPEND_OPERATIONS {
-    DEFINE_SUSPEND_OPERATIONS
-} XENBUS_SUSPEND_OPERATIONS, *PXENBUS_SUSPEND_OPERATIONS;
+typedef VOID
+(*XENBUS_SUSPEND_DEREGISTER)(
+    IN  PINTERFACE                  Interface,
+    IN  PXENBUS_SUSPEND_CALLBACK    Callback
+    );
 
-#undef SUSPEND_OPERATION
+typedef VOID
+(*XENBUS_SUSPEND_TRIGGER)(
+    IN  PINTERFACE  Interface
+    );
 
-typedef struct _XENBUS_SUSPEND_INTERFACE XENBUS_SUSPEND_INTERFACE, *PXENBUS_SUSPEND_INTERFACE;
+typedef ULONG
+(*XENBUS_SUSPEND_GET_COUNT)(
+    IN  PINTERFACE  Interface
+    );
 
-// 104f0a14-e2d5-42b6-b10f-a669ccd410a1
+// {0554F2AF-B510-4C71-AC03-1C503E394238}
+DEFINE_GUID(GUID_XENBUS_SUSPEND_INTERFACE,
+0x554f2af, 0xb510, 0x4c71, 0xac, 0x3, 0x1c, 0x50, 0x3e, 0x39, 0x42, 0x38);
 
-DEFINE_GUID(GUID_SUSPEND_INTERFACE, 
-            0x104f0a14,
-            0xe2d5,
-            0x42b6,
-            0xb1,
-            0x0f,
-            0xa6,
-            0x69,
-            0xcc,
-            0xd4,
-            0x10,
-            0xa1);
+struct _XENBUS_SUSPEND_INTERFACE_V1 {
+    INTERFACE                   Interface;
+    XENBUS_SUSPEND_ACQUIRE      Acquire;
+    XENBUS_SUSPEND_RELEASE      Release;
+    XENBUS_SUSPEND_REGISTER     Register;
+    XENBUS_SUSPEND_DEREGISTER   Deregister;
+    XENBUS_SUSPEND_TRIGGER      Trigger;
+    XENBUS_SUSPEND_GET_COUNT    GetCount;
+};
 
-#define SUSPEND_INTERFACE_VERSION   2
+typedef struct _XENBUS_SUSPEND_INTERFACE_V1 XENBUS_SUSPEND_INTERFACE, *PXENBUS_SUSPEND_INTERFACE;
 
-#define SUSPEND_OPERATIONS(_Interface) \
-        (PXENBUS_SUSPEND_OPERATIONS *)((ULONG_PTR)(_Interface))
+#define XENBUS_SUSPEND(_Method, _Interface, ...)    \
+    (_Interface)-> ## _Method((PINTERFACE)(_Interface), __VA_ARGS__)
 
-#define SUSPEND_CONTEXT(_Interface) \
-        (PXENBUS_SUSPEND_CONTEXT *)((ULONG_PTR)(_Interface) + sizeof (PVOID))
+#endif  // _WINDLL
 
-#define SUSPEND(_Operation, _Interface, ...) \
-        (*SUSPEND_OPERATIONS(_Interface))->SUSPEND_ ## _Operation((*SUSPEND_CONTEXT(_Interface)), __VA_ARGS__)
+#define XENBUS_SUSPEND_INTERFACE_VERSION_MIN    1
+#define XENBUS_SUSPEND_INTERFACE_VERSION_MAX    1
 
 #endif  // _XENBUS_SUSPEND_INTERFACE_H
 

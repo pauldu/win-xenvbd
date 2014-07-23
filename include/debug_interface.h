@@ -32,85 +32,71 @@
 #ifndef _XENBUS_DEBUG_INTERFACE_H
 #define _XENBUS_DEBUG_INTERFACE_H
 
+#ifndef _WINDLL
+
 typedef struct _XENBUS_DEBUG_CALLBACK   XENBUS_DEBUG_CALLBACK, *PXENBUS_DEBUG_CALLBACK;
 
-#define DEFINE_DEBUG_OPERATIONS                                                 \
-        DEBUG_OPERATION(VOID,                                                   \
-                        Acquire,                                                \
-                        (                                                       \
-                        IN  PXENBUS_DEBUG_CONTEXT  Context                      \
-                        )                                                       \
-                        )                                                       \
-        DEBUG_OPERATION(VOID,                                                   \
-                        Release,                                                \
-                        (                                                       \
-                        IN  PXENBUS_DEBUG_CONTEXT  Context                      \
-                        )                                                       \
-                        )                                                       \
-        DEBUG_OPERATION(NTSTATUS,                                               \
-                        Register,                                               \
-                        (                                                       \
-                        IN  PXENBUS_DEBUG_CONTEXT  Context,                     \
-                        IN  const CHAR             *Prefix,                     \
-                        IN  VOID                   (*Function)(PVOID, BOOLEAN), \
-                        IN  PVOID                  Argument OPTIONAL,           \
-                        OUT PXENBUS_DEBUG_CALLBACK *Callback                    \
-                        )                                                       \
-                        )                                                       \
-        DEBUG_OPERATION(VOID,                                                   \
-                        Printf,                                                 \
-                        (                                                       \
-                        IN  PXENBUS_DEBUG_CONTEXT  Context,                     \
-                        IN  PXENBUS_DEBUG_CALLBACK Callback,                    \
-                        IN  const CHAR             *Format,                     \
-                        ...                                                     \
-                        )                                                       \
-                        )                                                       \
-        DEBUG_OPERATION(VOID,                                                   \
-                        Deregister,                                             \
-                        (                                                       \
-                        IN  PXENBUS_DEBUG_CONTEXT  Context,                     \
-                        IN  PXENBUS_DEBUG_CALLBACK Callback                     \
-                        )                                                       \
-                        )
+typedef NTSTATUS
+(*XENBUS_DEBUG_ACQUIRE)(
+    IN  PINTERFACE  Interface
+    );
 
-typedef struct _XENBUS_DEBUG_CONTEXT    XENBUS_DEBUG_CONTEXT, *PXENBUS_DEBUG_CONTEXT;
+typedef VOID
+(*XENBUS_DEBUG_RELEASE)(
+    IN  PINTERFACE  Interface
+    );
 
-#define DEBUG_OPERATION(_Type, _Name, _Arguments) \
-        _Type (*DEBUG_ ## _Name) _Arguments;
+typedef NTSTATUS
+(*XENBUS_DEBUG_REGISTER)(
+    IN  PINTERFACE              Interface,
+    IN  const CHAR              *Prefix,
+    IN  VOID                    (*Function)(PVOID, BOOLEAN),
+    IN  PVOID                   Argument OPTIONAL,
+    OUT PXENBUS_DEBUG_CALLBACK  *Callback
+    );
 
-typedef struct _XENBUS_DEBUG_OPERATIONS {
-    DEFINE_DEBUG_OPERATIONS
-} XENBUS_DEBUG_OPERATIONS, *PXENBUS_DEBUG_OPERATIONS;
+typedef VOID
+(*XENBUS_DEBUG_PRINTF)(
+    IN  PINTERFACE              Interface,
+    IN  PXENBUS_DEBUG_CALLBACK  Callback,
+    IN  const CHAR              *Format,
+    ...
+    );
 
-#undef DEBUG_OPERATION
+typedef VOID
+(*XENBUS_DEBUG_DEREGISTER)(
+    IN  PINTERFACE              Interface,
+    IN  PXENBUS_DEBUG_CALLBACK  Callback
+    );
 
-typedef struct _XENBUS_DEBUG_INTERFACE   XENBUS_DEBUG_INTERFACE, *PXENBUS_DEBUG_INTERFACE;
+typedef VOID
+(*XENBUS_DEBUG_TRIGGER)(
+    IN  PINTERFACE              Interface
+    );
 
-// {54AAE52C-1838-49d3-AA43-9DDDD891603B}
-DEFINE_GUID(GUID_DEBUG_INTERFACE, 
-            0x54aae52c,
-            0x1838,
-            0x49d3,
-            0xaa,
-            0x43,
-            0x9d,
-            0xdd,
-            0xd8,
-            0x91,
-            0x60,
-            0x3b);
+// {0DF600AE-6B20-4227-BF94-03DA9A26A114}
+DEFINE_GUID(GUID_XENBUS_DEBUG_INTERFACE, 
+0xdf600ae, 0x6b20, 0x4227, 0xbf, 0x94, 0x3, 0xda, 0x9a, 0x26, 0xa1, 0x14);
 
-#define DEBUG_INTERFACE_VERSION    4
+struct _XENBUS_DEBUG_INTERFACE_V1 {
+    INTERFACE               Interface;
+    XENBUS_DEBUG_ACQUIRE    DebugAcquire;
+    XENBUS_DEBUG_RELEASE    DebugRelease;
+    XENBUS_DEBUG_REGISTER   DebugRegister;
+    XENBUS_DEBUG_PRINTF     DebugPrintf;
+    XENBUS_DEBUG_TRIGGER    DebugTrigger;
+    XENBUS_DEBUG_DEREGISTER DebugDeregister;
+};
 
-#define DEBUG_OPERATIONS(_Interface) \
-        (PXENBUS_DEBUG_OPERATIONS *)((ULONG_PTR)(_Interface))
+typedef struct _XENBUS_DEBUG_INTERFACE_V1 XENBUS_DEBUG_INTERFACE, *PXENBUS_DEBUG_INTERFACE;
 
-#define DEBUG_CONTEXT(_Interface) \
-        (PXENBUS_DEBUG_CONTEXT *)((ULONG_PTR)(_Interface) + sizeof (PVOID))
+#define XENBUS_DEBUG(_Method, _Interface, ...)    \
+    (_Interface)->Debug ## _Method((PINTERFACE)(_Interface), __VA_ARGS__)
 
-#define DEBUG(_Operation, _Interface, ...) \
-        (*DEBUG_OPERATIONS(_Interface))->DEBUG_ ## _Operation((*DEBUG_CONTEXT(_Interface)), __VA_ARGS__)
+#endif  // _WINDLL
+
+#define XENBUS_DEBUG_INTERFACE_VERSION_MIN  1
+#define XENBUS_DEBUG_INTERFACE_VERSION_MAX  1
 
 #endif  // _XENBUS_DEBUG_INTERFACE_H
 

@@ -29,14 +29,11 @@
  * SUCH DAMAGE.
  */
 
-#define INITGUID
-
 #include <windows.h>
 #include <setupapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <strsafe.h>
-#include <malloc.h>
 
 #include <version.h>
 
@@ -44,14 +41,18 @@ __user_code;
 
 #define MAXIMUM_BUFFER_SIZE 1024
 
-#define PNP_KEY      "SYSTEM\\CurrentControlSet\\Control\\PnP"
 #define SERVICES_KEY "SYSTEM\\CurrentControlSet\\Services"
 
 #define SERVICE_KEY(_Driver)    \
         SERVICES_KEY ## "\\" ## #_Driver
 
-#define UNPLUG_KEY(_Driver)     \
-        SERVICE_KEY(_Driver) ## "\\Unplug"
+#define UNPLUG_KEY \
+        SERVICE_KEY(XENFILT) ## "\\Unplug"
+
+#define CONTROL_KEY "SYSTEM\\CurrentControlSet\\Control"
+
+#define PNP_KEY \
+        CONTROL_KEY ## "\\Pnp"
 
 static VOID
 #pragma prefast(suppress:6262) // Function uses '1036' bytes of stack: exceeds /analyze:stacksize'1024'
@@ -98,8 +99,8 @@ __Log(
 #define Log(_Format, ...) \
         __Log(__MODULE__ "|" __FUNCTION__ ": " _Format, __VA_ARGS__)
 
-static PTCHAR
-GetErrorMessage(
+static FORCEINLINE PTCHAR
+__GetErrorMessage(
     IN  DWORD   Error
     )
 {
@@ -126,8 +127,8 @@ GetErrorMessage(
     return Message;
 }
 
-static const CHAR *
-FunctionName(
+static FORCEINLINE const CHAR *
+__FunctionName(
     IN  DI_FUNCTION Function
     )
 {
@@ -182,19 +183,158 @@ FunctionName(
 }
 
 static BOOLEAN
-RequestUnplug(
-    VOID          
+InstallUnplugService(
+    IN  PTCHAR      ClassName,
+    IN  PTCHAR      ServiceName
     )
 {
-    HKEY    UnplugKey;
-    DWORD   DisksLength;
-    PTCHAR  Disks;
-    DWORD   Offset;
-    HRESULT Error;
-    HRESULT Result;
+    HKEY            UnplugKey;
+    HRESULT         Error;
+    DWORD           Type;
+    DWORD           OldLength;
+    DWORD           NewLength;
+    PTCHAR          ServiceNames;
+    ULONG           Offset;
+
+    Error = RegCreateKeyEx(HKEY_LOCAL_MACHINE,
+                           UNPLUG_KEY,
+                           0,
+                           NULL,
+                           REG_OPTION_NON_VOLATILE,
+                           KEY_ALL_ACCESS,
+                           NULL,
+                           &UnplugKey,
+                           NULL);
+    if (Error != ERROR_SUCCESS) {
+        SetLastError(Error);
+        goto fail1;
+    }
+
+    Error = RegQueryValueEx(UnplugKey,
+                            ClassName,
+                            NULL,
+                            &Type,
+                            NULL,
+                            &OldLength);
+    if (Error != ERROR_SUCCESS) {
+        if (Error == ERROR_FILE_NOT_FOUND) {
+            Type = REG_MULTI_SZ;
+            OldLength = sizeof (TCHAR);
+        } else {
+            SetLastError(Error);
+            goto fail2;
+        }
+    }
+
+    if (Type != REG_MULTI_SZ) {
+        SetLastError(ERROR_BAD_FORMAT);
+        goto fail3;
+    }
+
+    NewLength = OldLength + (DWORD)((strlen(ServiceName) + 1) * sizeof (TCHAR));
+
+    ServiceNames = calloc(1, NewLength);
+    if (ServiceNames == NULL)
+        goto fail4;
+
+    Offset = 0;
+    if (OldLength != sizeof (TCHAR)) {
+        Error = RegQueryValueEx(UnplugKey,
+                                ClassName,
+                                NULL,
+                                &Type,
+                                (LPBYTE)ServiceNames,
+                                &OldLength);
+        if (Error != ERROR_SUCCESS) {
+            SetLastError(ERROR_BAD_FORMAT);
+            goto fail5;
+        }
+
+        while (ServiceNames[Offset] != '\0') {
+            ULONG   ServiceNameLength;
+
+            ServiceNameLength = (ULONG)strlen(&ServiceNames[Offset]) / sizeof (TCHAR);
+
+            if (_stricmp(&ServiceNames[Offset], ServiceName) == 0) {
+                Log("%s already present", ServiceName);
+                goto done;
+            }
+
+            Offset += ServiceNameLength + 1;
+        }
+    }
+
+    memmove(&ServiceNames[Offset], ServiceName, strlen(ServiceName));
+    Log("added %s", ServiceName);
+
+    Error = RegSetValueEx(UnplugKey,
+                          ClassName,
+                          0,
+                          REG_MULTI_SZ,
+                          (LPBYTE)ServiceNames,
+                          NewLength);
+    if (Error != ERROR_SUCCESS) {
+        SetLastError(Error);
+        goto fail6;
+    }
+
+done:
+    free(ServiceNames);
+
+    RegCloseKey(UnplugKey);
+
+    return TRUE;
+
+fail6:
+    Log("fail5");
+
+fail5:
+    Log("fail5");
+
+    free(ServiceNames);
+
+fail4:
+    Log("fail5");
+
+fail3:
+    Log("fail5");
+
+fail2:
+    Log("fail5");
+
+    RegCloseKey(UnplugKey);
+
+fail1:
+    Error = GetLastError();
+
+    {
+        PTCHAR  Message;
+
+        Message = __GetErrorMessage(Error);
+        Log("fail1 (%s)", Message);
+        LocalFree(Message);
+    }
+
+    return FALSE;
+}
+
+static BOOLEAN
+RemoveUnplugService(
+    IN  PTCHAR      ClassName,
+    IN  PTCHAR      ServiceName
+    )
+{
+    HKEY            UnplugKey;
+    HRESULT         Error;
+    DWORD           Type;
+    DWORD           OldLength;
+    DWORD           NewLength;
+    PTCHAR          ServiceNames;
+    ULONG           Offset;
+    ULONG           ServiceNameLength;
 
     Error = RegOpenKeyEx(HKEY_LOCAL_MACHINE,
-                         UNPLUG_KEY(XENFILT),
+                         UNPLUG_KEY,
                          0,
                          KEY_ALL_ACCESS,
                          &UnplugKey);
@@ -203,51 +343,90 @@ RequestUnplug(
         goto fail1;
     }
 
-    DisksLength = (DWORD)((strlen("XENVBD") + 1 +
-                           1) * sizeof (TCHAR));
-
-    Disks = calloc(1, DisksLength);
-    if (Disks == NULL)
+    Error = RegQueryValueEx(UnplugKey,
+                            ClassName,
+                            NULL,
+                            &Type,
+                            NULL,
+                            &OldLength);
+    if (Error != ERROR_SUCCESS) {
+        SetLastError(Error);
         goto fail2;
+    }
 
-    Offset = 0;
-
-    Result = StringCbPrintf(Disks + Offset,
-                            DisksLength - (Offset * sizeof (TCHAR)),
-                            "XENVBD");
-    if (!SUCCEEDED(Result)) {
-        SetLastError(ERROR_BUFFER_OVERFLOW);
+    if (Type != REG_MULTI_SZ) {
+        SetLastError(ERROR_BAD_FORMAT);
         goto fail3;
     }
 
-    Offset += (DWORD)(strlen("XENVBD") + 1);
-
-    *(Disks + Offset) = '\0';
-
-    Error = RegSetValueEx(UnplugKey,
-                          "DISKS",
-                          0,
-                          REG_MULTI_SZ,
-                          (LPBYTE)Disks,
-                          DisksLength);
-    if (Error != ERROR_SUCCESS) {
-        SetLastError(Error);
+    ServiceNames = calloc(1, OldLength);
+    if (ServiceNames == NULL)
         goto fail4;
+
+    Error = RegQueryValueEx(UnplugKey,
+                            ClassName,
+                            NULL,
+                            &Type,
+                            (LPBYTE)ServiceNames,
+                            &OldLength);
+    if (Error != ERROR_SUCCESS) {
+        SetLastError(ERROR_BAD_FORMAT);
+        goto fail5;
     }
 
-    free(Disks);
+    Offset = 0;
+    ServiceNameLength = 0;
+    while (ServiceNames[Offset] != '\0') {
+        ServiceNameLength = (ULONG)strlen(&ServiceNames[Offset]) / sizeof (TCHAR);
+
+        if (_stricmp(&ServiceNames[Offset], ServiceName) == 0)
+            goto remove;
+
+        Offset += ServiceNameLength + 1;
+    }
+
+    goto done;
+
+remove:
+    NewLength = OldLength - ((ServiceNameLength + 1) * sizeof (TCHAR));
+
+    memmove(&ServiceNames[Offset],
+            &ServiceNames[Offset + ServiceNameLength + 1],
+            (NewLength - Offset) * sizeof (TCHAR));
+
+    Log("removed %s", ServiceName);
+
+    Error = RegSetValueEx(UnplugKey,
+                          ClassName,
+                          0,
+                          REG_MULTI_SZ,
+                          (LPBYTE)ServiceNames,
+                          NewLength);
+    if (Error != ERROR_SUCCESS) {
+        SetLastError(Error);
+        goto fail6;
+    }
+
+done:
+    free(ServiceNames);
 
     RegCloseKey(UnplugKey);
 
     return TRUE;
+
+fail6:
+    Log("fail6");
+
+fail5:
+    Log("fail5");
+
+    free(ServiceNames);
 
 fail4:
     Log("fail4");
 
 fail3:
     Log("fail3");
-
-    free(Disks);
 
 fail2:
     Log("fail2");
@@ -260,7 +439,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -269,11 +448,11 @@ fail1:
 }
 
 static BOOLEAN
-ModifyBootGPO(
+OverrideGroupPolicyOptions(
     )
 {
     HKEY        PnpKey;
-    DWORD       Value = 0;
+    DWORD       Value;
     HRESULT     Error;
 
     Error = RegOpenKeyEx(HKEY_LOCAL_MACHINE,
@@ -285,6 +464,8 @@ ModifyBootGPO(
         SetLastError(Error);
         goto fail1;
     }
+
+    Value = 0;
 
     Error = RegSetValueEx(PnpKey,
                           "DisableCDDB",
@@ -326,7 +507,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -335,13 +516,14 @@ fail1:
 }
 
 static BOOLEAN
-IncreaseDiskTimeout(
+IncreaseDiskTimeOut(
+    VOID
     )
 {
     HKEY        Key;
     DWORD       Type;
-    DWORD       Size;
-    DWORD       Value = 0;
+    DWORD       Value;
+    DWORD       ValueLength;
     HRESULT     Error;
 
     Error = RegOpenKeyEx(HKEY_LOCAL_MACHINE,
@@ -354,37 +536,37 @@ IncreaseDiskTimeout(
         goto fail1;
     }
 
+    ValueLength = sizeof (DWORD);
+
     Error = RegQueryValueEx(Key,
                             "TimeOutValue",
                             NULL,
                             &Type,
                             (LPBYTE)&Value,
-                            &Size);
+                            &ValueLength);
     if (Error != ERROR_SUCCESS) {
-        goto write_value;
+        if (Error != ERROR_FILE_NOT_FOUND)
+            goto fail2;
+
+        Type = REG_DWORD;
+        Value = 0;
     }
 
     if (Type != REG_DWORD) {
         SetLastError(ERROR_INVALID_DATA);
-        goto fail2;
-    }
-
-    if (Size != sizeof(DWORD)) {
-        SetLastError(ERROR_BAD_LENGTH);
         goto fail3;
     }
 
     if (Value >= 120)
         goto done;
 
-write_value:
     Value = 120;
     Error = RegSetValueEx(Key,
                           "TimeOutValue",
                           0,
                           REG_DWORD,
                           (LPBYTE)&Value,
-                          (DWORD)sizeof(DWORD));
+                          ValueLength);
     if (Error != ERROR_SUCCESS) {
         SetLastError(Error);
         goto fail4;
@@ -412,7 +594,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -421,15 +603,20 @@ fail1:
 }
 
 static BOOLEAN
-IncrementServiceCount(
+GetServiceCount(
     OUT PDWORD  Count
     )
 {
     HKEY        ServiceKey;
+    HKEY        EnumKey;
     DWORD       Value;
     DWORD       ValueLength;
     DWORD       Type;
     HRESULT     Error;
+
+    Log("====>");
+
+    *Count = 0;
 
     Error = RegOpenKeyEx(HKEY_LOCAL_MACHINE,
                          SERVICE_KEY(XENVBD),
@@ -437,50 +624,51 @@ IncrementServiceCount(
                          KEY_ALL_ACCESS,
                          &ServiceKey);
     if (Error != ERROR_SUCCESS) {
+        if (Error == ERROR_FILE_NOT_FOUND)
+            goto done;
+
         SetLastError(Error);
         goto fail1;
     }
 
+    Error = RegOpenKeyEx(ServiceKey,
+                         "Enum",
+                         0,
+                         KEY_ALL_ACCESS,
+                         &EnumKey);
+    if (Error != ERROR_SUCCESS) {
+        SetLastError(Error);
+        goto fail2;
+    }
+
     ValueLength = sizeof (DWORD);
 
-    Error = RegQueryValueEx(ServiceKey,
+    Error = RegQueryValueEx(EnumKey,
                             "Count",
                             NULL,
                             &Type,
                             (LPBYTE)&Value,
                             &ValueLength);
     if (Error != ERROR_SUCCESS) {
-        if (Error == ERROR_FILE_NOT_FOUND) {
-            Value = 0;
-            goto done;
-        }
-
         SetLastError(Error);
-        goto fail2;
+        goto fail3;
     }
 
     if (Type != REG_DWORD) {
         SetLastError(ERROR_BAD_FORMAT);
-        goto fail3;
+        goto fail4;
     }
+
+    *Count = Value;
+
+    RegCloseKey(EnumKey);
 
 done:
-    Value++;
-
-    Error = RegSetValueEx(ServiceKey,
-                          "Count",
-                          0,
-                          REG_DWORD,
-                          (LPBYTE)&Value,
-                          ValueLength);
-    if (Error != ERROR_SUCCESS) {
-        SetLastError(Error);
-        goto fail4;
-    }
-
-    *Count = Value;
-
     RegCloseKey(ServiceKey);
+
+    Log("%d", *Count);
+
+    Log("<====");
 
     return TRUE;
 
@@ -489,6 +677,8 @@ fail4:
 
 fail3:
     Log("fail3");
+
+    RegCloseKey(EnumKey);
 
 fail2:
     Log("fail2");
@@ -501,98 +691,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
-        Log("fail1 (%s)", Message);
-        LocalFree(Message);
-    }
-
-    return FALSE;
-}
-
-static BOOLEAN
-DecrementServiceCount(
-    OUT PDWORD  Count
-    )
-{
-    HKEY        ServiceKey;
-    DWORD       Value;
-    DWORD       ValueLength;
-    DWORD       Type;
-    HRESULT     Error;
-
-    Error = RegOpenKeyEx(HKEY_LOCAL_MACHINE,
-                         SERVICE_KEY(XENVBD),
-                         0,
-                         KEY_ALL_ACCESS,
-                         &ServiceKey);
-    if (Error != ERROR_SUCCESS) {
-        SetLastError(Error);
-        goto fail1;
-    }
-
-    ValueLength = sizeof (DWORD);
-
-    Error = RegQueryValueEx(ServiceKey,
-                            "Count",
-                            NULL,
-                            &Type,
-                            (LPBYTE)&Value,
-                            &ValueLength);
-    if (Error != ERROR_SUCCESS) {
-        SetLastError(Error);
-        goto fail2;
-    }
-
-    if (Type != REG_DWORD) {
-        SetLastError(ERROR_BAD_FORMAT);
-        goto fail3;
-    }
-
-    if (Value == 0) {
-        SetLastError(ERROR_INVALID_DATA);
-        goto fail4;
-    }
-
-    --Value;
-
-    Error = RegSetValueEx(ServiceKey,
-                          "Count",
-                          0,
-                          REG_DWORD,
-                          (LPBYTE)&Value,
-                          ValueLength);
-    if (Error != ERROR_SUCCESS) {
-        SetLastError(Error);
-        goto fail5;
-    }
-
-    *Count = Value;
-
-    RegCloseKey(ServiceKey);
-
-    return TRUE;
-
-fail5:
-    Log("fail5");
-
-fail4:
-    Log("fail4");
-
-fail3:
-    Log("fail3");
-
-fail2:
-    Log("fail2");
-
-    RegCloseKey(ServiceKey);
-
-fail1:
-    Error = GetLastError();
-
-    {
-        PTCHAR  Message;
-
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -607,6 +706,7 @@ RequestReboot(
     )
 {
     SP_DEVINSTALL_PARAMS    DeviceInstallParams;
+    HRESULT                 Error;
 
     DeviceInstallParams.cbSize = sizeof (DeviceInstallParams);
 
@@ -627,7 +727,19 @@ RequestReboot(
     return TRUE;
 
 fail2:
+    Log("fail2");
+
 fail1:
+    Error = GetLastError();
+
+    {
+        PTCHAR  Message;
+
+        Message = __GetErrorMessage(Error);
+        Log("fail1 (%s)", Message);
+        LocalFree(Message);
+    }
+
     return FALSE;
 }
 
@@ -638,15 +750,36 @@ __DifInstallPreProcess(
     IN  PCOINSTALLER_CONTEXT_DATA   Context
     )
 {
-    Log("====>");
+    HRESULT                         Error;
+    DWORD                           Count;
+    BOOLEAN                         Success;
 
     UNREFERENCED_PARAMETER(DeviceInfoSet);
     UNREFERENCED_PARAMETER(DeviceInfoData);
     UNREFERENCED_PARAMETER(Context);
 
+    Log("====>");
+
+    Success = GetServiceCount(&Count);
+    if (!Success)
+        goto fail1;
+
     Log("<====");
 
-    return ERROR_DI_POSTPROCESSING_REQUIRED; 
+    return NO_ERROR;
+
+fail1:
+    Error = GetLastError();
+
+    {
+        PTCHAR  Message;
+
+        Message = __GetErrorMessage(Error);
+        Log("fail1 (%s)", Message);
+        LocalFree(Message);
+    }
+
+    return Error;
 }
 
 static FORCEINLINE HRESULT
@@ -656,42 +789,30 @@ __DifInstallPostProcess(
     IN  PCOINSTALLER_CONTEXT_DATA   Context
     )
 {
-    BOOLEAN                         Success;
-    DWORD                           Count;
     HRESULT                         Error;
+    DWORD                           Count;
+    BOOLEAN                         Success;
 
     UNREFERENCED_PARAMETER(DeviceInfoSet);
     UNREFERENCED_PARAMETER(DeviceInfoData);
+    UNREFERENCED_PARAMETER(Context);
 
     Log("====>");
 
-    Error = Context->InstallResult;
-    if (Error != NO_ERROR) {
-        SetLastError(Error);
+    Success = GetServiceCount(&Count);
+    if (!Success)
         goto fail1;
-    }
-
-    Success = RequestUnplug();
-    if (!Success)
-        goto fail2;
-
-    Success = IncrementServiceCount(&Count);
-    if (!Success)
-        goto fail3;
 
     if (Count == 1) {
-        ModifyBootGPO();
-        IncreaseDiskTimeout();
+        (VOID) OverrideGroupPolicyOptions();
+        (VOID) IncreaseDiskTimeOut();
+        (VOID) InstallUnplugService("DISKS", "XENVBD");
         (VOID) RequestReboot(DeviceInfoSet, DeviceInfoData);
     }
 
+    Log("<====");
+
     return NO_ERROR;
-
-fail3:
-    Log("fail3");
-
-fail2:
-    Log("fail2");
 
 fail1:
     Error = GetLastError();
@@ -699,7 +820,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -726,9 +847,26 @@ DifInstall(
 
     Log("Flags = %08x", DeviceInstallParams.Flags);
 
-    Error = (!Context->PostProcessing) ?
-            __DifInstallPreProcess(DeviceInfoSet, DeviceInfoData, Context) :
-            __DifInstallPostProcess(DeviceInfoSet, DeviceInfoData, Context);
+    if (!Context->PostProcessing) {
+        Error = __DifInstallPreProcess(DeviceInfoSet, DeviceInfoData, Context);
+
+        if (Error == NO_ERROR)
+            Error = ERROR_DI_POSTPROCESSING_REQUIRED; 
+    } else {
+        Error = Context->InstallResult;
+        
+        if (Error == NO_ERROR) {
+            (VOID) __DifInstallPostProcess(DeviceInfoSet, DeviceInfoData, Context);
+        } else {
+            PTCHAR  Message;
+
+            Message = __GetErrorMessage(Error);
+            Log("NOT RUNNING (__DifInstallPreProcess Error: %s)", Message);
+            LocalFree(Message);
+        }
+
+        Error = NO_ERROR; 
+    }
 
     return Error;
 
@@ -738,7 +876,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -753,9 +891,9 @@ __DifRemovePreProcess(
     IN  PCOINSTALLER_CONTEXT_DATA   Context
     )
 {
-    BOOLEAN                         Success;
-    DWORD                           Count;
     HRESULT                         Error;
+    DWORD                           Count;
+    BOOLEAN                         Success;
 
     UNREFERENCED_PARAMETER(DeviceInfoSet);
     UNREFERENCED_PARAMETER(DeviceInfoData);
@@ -763,15 +901,14 @@ __DifRemovePreProcess(
 
     Log("====>");
 
-    Success = DecrementServiceCount(&Count);
+    Success = GetServiceCount(&Count);
     if (!Success)
-        goto fail1;    
+        goto fail1;
 
-    Context->PrivateData = (Count == 0) ? (PVOID)TRUE : (PVOID)FALSE;
+    if (Count == 1)
+        (VOID) RemoveUnplugService("DISKS", "XENVBD");
 
-    Log("<====");
-
-    return ERROR_DI_POSTPROCESSING_REQUIRED; 
+    return NO_ERROR; 
 
 fail1:
     Error = GetLastError();
@@ -779,7 +916,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -794,34 +931,23 @@ __DifRemovePostProcess(
     IN  PCOINSTALLER_CONTEXT_DATA   Context
     )
 {
-    BOOLEAN                         NeedReboot;
-    BOOLEAN                         Success;
     HRESULT                         Error;
+    DWORD                           Count;
+    BOOLEAN                         Success;
+
+    UNREFERENCED_PARAMETER(DeviceInfoSet);
+    UNREFERENCED_PARAMETER(DeviceInfoData);
+    UNREFERENCED_PARAMETER(Context);
 
     Log("====>");
 
-    Error = Context->InstallResult;
-    if (Error != NO_ERROR) {
-        SetLastError(Error);
-        goto fail1;
-    }
-
-    NeedReboot = (BOOLEAN)(ULONG_PTR)Context->PrivateData;
-
-    if (!NeedReboot)
-        goto done;
-
-    Success = RequestReboot(DeviceInfoSet, DeviceInfoData);
+    Success = GetServiceCount(&Count);
     if (!Success)
-        goto fail2;
+        goto fail1;
 
-done:
     Log("<====");
 
     return NO_ERROR;
-
-fail2:
-    Log("fail2");
 
 fail1:
     Error = GetLastError();
@@ -829,7 +955,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -856,9 +982,26 @@ DifRemove(
 
     Log("Flags = %08x", DeviceInstallParams.Flags);
 
-    Error = (!Context->PostProcessing) ?
-            __DifRemovePreProcess(DeviceInfoSet, DeviceInfoData, Context) :
-            __DifRemovePostProcess(DeviceInfoSet, DeviceInfoData, Context);
+    if (!Context->PostProcessing) {
+        Error = __DifRemovePreProcess(DeviceInfoSet, DeviceInfoData, Context);
+
+        if (Error == NO_ERROR)
+            Error = ERROR_DI_POSTPROCESSING_REQUIRED; 
+    } else {
+        Error = Context->InstallResult;
+        
+        if (Error == NO_ERROR) {
+            (VOID) __DifRemovePostProcess(DeviceInfoSet, DeviceInfoData, Context);
+        } else {
+            PTCHAR  Message;
+
+            Message = __GetErrorMessage(Error);
+            Log("NOT RUNNING (__DifRemovePreProcess Error: %s)", Message);
+            LocalFree(Message);
+        }
+
+        Error = NO_ERROR; 
+    }
 
     return Error;
 
@@ -868,7 +1011,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -892,17 +1035,18 @@ Entry(
 
     if (!Context->PostProcessing) {
         Log("%s PreProcessing",
-            FunctionName(Function));
+            __FunctionName(Function));
     } else {
         Log("%s PostProcessing (%08x)",
-            FunctionName(Function),
+            __FunctionName(Function),
             Context->InstallResult);
     }
 
     switch (Function) {
-    case DIF_INSTALLDEVICE:
+    case DIF_INSTALLDEVICE: {
         Error = DifInstall(DeviceInfoSet, DeviceInfoData, Context);
         break;
+    }
     case DIF_REMOVE:
         Error = DifRemove(DeviceInfoSet, DeviceInfoData, Context);
         break;

@@ -131,7 +131,11 @@ NotifierDpc(
 
         if (!Notifier->Connected)
             break;
-        if (!EVTCHN(Unmask, Notifier->EvtchnInterface, Notifier->Evtchn, FALSE))
+
+        if (!XENBUS_EVTCHN(Unmask,
+                           Notifier->EvtchnInterface,
+                           Notifier->Evtchn,
+                           FALSE))
             break;
     }
 }
@@ -175,38 +179,59 @@ NotifierConnect(
     )
 {
     PXENVBD_FDO Fdo = PdoGetFdo(FrontendGetPdo(Notifier->Frontend));
+    NTSTATUS    status;
 
     ASSERT(Notifier->Connected == FALSE);
 
     Notifier->StoreInterface = FdoAcquireStore(Fdo);
-    Notifier->EvtchnInterface = FdoAcquireEvtchn(Fdo);
 
-    Notifier->Evtchn = EVTCHN(Open, 
-                                Notifier->EvtchnInterface, 
-                                EVTCHN_UNBOUND, 
-                                NotifierInterrupt,
-                                Notifier, 
-                                BackendDomain, 
-                                TRUE);
-    if (Notifier->Evtchn == NULL)
+    status = STATUS_UNSUCCESSFUL;
+    if (Notifier->StoreInterface == NULL)
         goto fail1;
 
-    Notifier->Port = EVTCHN(Port, Notifier->EvtchnInterface, Notifier->Evtchn);
+    Notifier->EvtchnInterface = FdoAcquireEvtchn(Fdo);
 
-    if (EVTCHN(Unmask, Notifier->EvtchnInterface, Notifier->Evtchn, FALSE))
-        EVTCHN(Trigger, Notifier->EvtchnInterface, Notifier->Evtchn);
+    status = STATUS_UNSUCCESSFUL;
+    if (Notifier->EvtchnInterface == NULL)
+        goto fail2;
+
+    Notifier->Evtchn = XENBUS_EVTCHN(Open, 
+                                     Notifier->EvtchnInterface, 
+                                     XENBUS_EVTCHN_TYPE_UNBOUND, 
+                                     NotifierInterrupt,
+                                     Notifier, 
+                                     BackendDomain, 
+                                     TRUE);
+
+    status = STATUS_NO_MEMORY;
+    if (Notifier->Evtchn == NULL)
+        goto fail3;
+
+    Notifier->Port = XENBUS_EVTCHN(GetPort,
+                                   Notifier->EvtchnInterface,
+                                   Notifier->Evtchn);
+
+    if (XENBUS_EVTCHN(Unmask,
+                      Notifier->EvtchnInterface,
+                      Notifier->Evtchn,
+                      FALSE))
+        XENBUS_EVTCHN(Trigger,
+                      Notifier->EvtchnInterface,
+                      Notifier->Evtchn);
 
     Notifier->Connected = TRUE;
     return STATUS_SUCCESS;
 
-fail1:
-    EVTCHN(Release, Notifier->EvtchnInterface);
+fail3:
+    XENBUS_EVTCHN(Release, Notifier->EvtchnInterface);
     Notifier->EvtchnInterface = NULL;
 
-    STORE(Release, Notifier->StoreInterface);
+fail2:
+    XENBUS_STORE(Release, Notifier->StoreInterface);
     Notifier->StoreInterface = NULL;
 
-    return STATUS_NO_MEMORY;
+fail1:
+    return status;
 }
 
 NTSTATUS
@@ -216,13 +241,13 @@ NotifierStoreWrite(
     IN  PCHAR                       FrontendPath
     )
 {
-    return STORE(Printf, 
-                Notifier->StoreInterface, 
-                Transaction, 
-                FrontendPath, 
-                "event-channel", 
-                "%u", 
-                Notifier->Port);
+    return XENBUS_STORE(Printf, 
+                        Notifier->StoreInterface, 
+                        Transaction, 
+                        FrontendPath, 
+                        "event-channel", 
+                        "%u", 
+                        Notifier->Port);
 }
 
 VOID
@@ -232,7 +257,9 @@ NotifierEnable(
 {
     ASSERT(Notifier->Enabled == FALSE);
 
-    EVTCHN(Trigger, Notifier->EvtchnInterface, Notifier->Evtchn);
+    XENBUS_EVTCHN(Trigger,
+                  Notifier->EvtchnInterface,
+                  Notifier->Evtchn);
 
     Notifier->Enabled = TRUE;
 }
@@ -254,14 +281,16 @@ NotifierDisconnect(
 {
     ASSERT(Notifier->Connected == TRUE);
 
-    EVTCHN(Close, Notifier->EvtchnInterface, Notifier->Evtchn);
+    XENBUS_EVTCHN(Close,
+                  Notifier->EvtchnInterface,
+                  Notifier->Evtchn);
     Notifier->Evtchn = NULL;
     Notifier->Port = 0;
 
-    EVTCHN(Release, Notifier->EvtchnInterface);
+    XENBUS_EVTCHN(Release, Notifier->EvtchnInterface);
     Notifier->EvtchnInterface = NULL;
 
-    STORE(Release, Notifier->StoreInterface);
+    XENBUS_STORE(Release, Notifier->StoreInterface);
     Notifier->StoreInterface = NULL;
 
     Notifier->NumInts = Notifier->NumDpcs = 0;
@@ -276,14 +305,14 @@ NotifierDebugCallback(
     IN  PXENBUS_DEBUG_CALLBACK      Callback
     )
 {
-    DEBUG(Printf, Debug, Callback,
-            "NOTIFIER: Int / DPC : %d / %d\n",
-            Notifier->NumInts, Notifier->NumDpcs);
+    XENBUS_DEBUG(Printf, Debug, Callback,
+                 "NOTIFIER: Int / DPC : %d / %d\n",
+                 Notifier->NumInts, Notifier->NumDpcs);
 
     if (Notifier->Evtchn) {
-        DEBUG(Printf, Debug, Callback,
-            "NOTIFIER: Evtchn : %p (%d)\n", 
-            Notifier->Evtchn, Notifier->Port);
+        XENBUS_DEBUG(Printf, Debug, Callback,
+                     "NOTIFIER: Evtchn : %p (%d)\n", 
+                     Notifier->Evtchn, Notifier->Port);
     }
 
     Notifier->NumInts = 0;
@@ -296,7 +325,9 @@ NotifierTrigger(
     )
 {
     if (Notifier->Enabled)
-        EVTCHN(Trigger, Notifier->EvtchnInterface, Notifier->Evtchn);
+        XENBUS_EVTCHN(Trigger,
+                      Notifier->EvtchnInterface,
+                      Notifier->Evtchn);
 }
 
 VOID
@@ -305,6 +336,8 @@ NotifierSend(
     )
 {
     if (Notifier->Enabled)
-        EVTCHN(Send, Notifier->EvtchnInterface, Notifier->Evtchn);
+        XENBUS_EVTCHN(Send,
+                      Notifier->EvtchnInterface,
+                      Notifier->Evtchn);
 }
 

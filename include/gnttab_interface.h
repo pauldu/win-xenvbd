@@ -32,107 +32,87 @@
 #ifndef _XENBUS_GNTTAB_INTERFACE_H
 #define _XENBUS_GNTTAB_INTERFACE_H
 
+#ifndef _WINDLL
+
 typedef struct _XENBUS_GNTTAB_CACHE         XENBUS_GNTTAB_CACHE, *PXENBUS_GNTTAB_CACHE;
 typedef struct _XENBUS_GNTTAB_DESCRIPTOR    XENBUS_GNTTAB_DESCRIPTOR, *PXENBUS_GNTTAB_DESCRIPTOR;
 
-#define DEFINE_GNTTAB_OPERATIONS                                                \
-        GNTTAB_OPERATION(VOID,                                                  \
-                         Acquire,                                               \
-                         (                                                      \
-                         IN  PXENBUS_GNTTAB_CONTEXT     Context                 \
-                         )                                                      \
-                         )                                                      \
-        GNTTAB_OPERATION(VOID,                                                  \
-                         Release,                                               \
-                         (                                                      \
-                         IN  PXENBUS_GNTTAB_CONTEXT     Context                 \
-                         )                                                      \
-                         )                                                      \
-        GNTTAB_OPERATION(NTSTATUS,                                              \
-                         CreateCache,                                           \
-                         (                                                      \
-                         IN  PXENBUS_GNTTAB_CONTEXT     Context,                \
-                         IN  const CHAR                 *Name,                  \
-                         IN  ULONG                      Reservation,            \
-                         IN  VOID                       (*AcquireLock)(PVOID),  \
-                         IN  VOID                       (*ReleaseLock)(PVOID),  \
-                         IN  PVOID                      Argument,               \
-                         OUT PXENBUS_GNTTAB_CACHE       *Cache                  \
-                         )                                                      \
-                         )                                                      \
-        GNTTAB_OPERATION(VOID,                                                  \
-                         DestroyCache,                                          \
-                         (                                                      \
-                         IN  PXENBUS_GNTTAB_CONTEXT     Context,                \
-                         IN  PXENBUS_GNTTAB_CACHE       Cache                   \
-                         )                                                      \
-                         )                                                      \
-        GNTTAB_OPERATION(NTSTATUS,                                              \
-                         PermitForeignAccess,                                   \
-                         (                                                      \
-                         IN  PXENBUS_GNTTAB_CONTEXT     Context,                \
-                         IN  PXENBUS_GNTTAB_CACHE       Cache,                  \
-                         IN  BOOLEAN                    Locked,                 \
-                         IN  USHORT                     Domain,                 \
-                         IN  PFN_NUMBER                 Pfn,                    \
-                         IN  BOOLEAN                    ReadOnly,               \
-                         OUT PXENBUS_GNTTAB_DESCRIPTOR  *Descriptor             \
-                         )                                                      \
-                         )                                                      \
-        GNTTAB_OPERATION(NTSTATUS,                                              \
-                         RevokeForeignAccess,                                   \
-                         (                                                      \
-                         IN  PXENBUS_GNTTAB_CONTEXT     Context,                \
-                         IN  PXENBUS_GNTTAB_CACHE       Cache,                  \
-                         IN  BOOLEAN                    Locked,                 \
-                         IN  PXENBUS_GNTTAB_DESCRIPTOR  Descriptor              \
-                         )                                                      \
-                         )                                                      \
-        GNTTAB_OPERATION(ULONG,                                                 \
-                         Reference,                                             \
-                         (                                                      \
-                         IN  PXENBUS_GNTTAB_CONTEXT     Context,                \
-                         IN  PXENBUS_GNTTAB_DESCRIPTOR  Descriptor              \
-                         )                                                      \
-                         )
+typedef NTSTATUS
+(*XENBUS_GNTTAB_ACQUIRE)(
+    IN  PINTERFACE  Interface
+    );
 
-typedef struct _XENBUS_GNTTAB_CONTEXT   XENBUS_GNTTAB_CONTEXT, *PXENBUS_GNTTAB_CONTEXT;
+typedef VOID
+(*XENBUS_GNTTAB_RELEASE)(
+    IN  PINTERFACE  Interface
+    );
 
-#define GNTTAB_OPERATION(_Type, _Name, _Arguments) \
-        _Type (*GNTTAB_ ## _Name) _Arguments;
+typedef NTSTATUS
+(*XENBUS_GNTTAB_CREATE_CACHE)(
+    IN  PINTERFACE              Interface,
+    IN  const CHAR              *Name,
+    IN  ULONG                   Reservation,
+    IN  VOID                    (*AcquireLock)(PVOID),
+    IN  VOID                    (*ReleaseLock)(PVOID),
+    IN  PVOID                   Argument OPTIONAL,
+    OUT PXENBUS_GNTTAB_CACHE    *Cache
+    );
 
-typedef struct _XENBUS_GNTTAB_OPERATIONS {
-    DEFINE_GNTTAB_OPERATIONS
-} XENBUS_GNTTAB_OPERATIONS, *PXENBUS_GNTTAB_OPERATIONS;
+typedef NTSTATUS
+(*XENBUS_GNTTAB_PERMIT_FOREIGN_ACCESS)(
+    IN  PINTERFACE                  Interface,
+    IN  PXENBUS_GNTTAB_CACHE        Cache,
+    IN  BOOLEAN                     Locked,
+    IN  USHORT                      Domain,
+    IN  PFN_NUMBER                  Pfn,
+    IN  BOOLEAN                     ReadOnly,
+    OUT PXENBUS_GNTTAB_DESCRIPTOR   *Descriptor
+    );
 
-#undef GNTTAB_OPERATION
+typedef NTSTATUS
+(*XENBUS_GNTTAB_REVOKE_FOREIGN_ACCESS)(
+    IN  PINTERFACE                  Interface,
+    IN  PXENBUS_GNTTAB_CACHE        Cache,
+    IN  BOOLEAN                     Locked,
+    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor
+    );
 
-typedef struct _XENBUS_GNTTAB_INTERFACE  XENBUS_GNTTAB_INTERFACE, *PXENBUS_GNTTAB_INTERFACE;
+typedef ULONG
+(*XENBUS_GNTTAB_GET_REFERENCE)(
+    IN  PINTERFACE                  Interface,
+    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor
+    );
 
-// {CC32D7DF-88BE-4248-9A53-1F178BE9D60E}
-DEFINE_GUID(GUID_GNTTAB_INTERFACE, 
-            0xcc32d7df,
-            0x88be,
-            0x4248,
-            0x9a,
-            0x53,
-            0x1f,
-            0x17,
-            0x8b,
-            0xe9,
-            0xd6,
-            0xe);
+typedef VOID
+(*XENBUS_GNTTAB_DESTROY_CACHE)(
+    IN  PINTERFACE              Interface,
+    IN  PXENBUS_GNTTAB_CACHE    Cache
+    );
 
-#define GNTTAB_INTERFACE_VERSION    5
+// {763679C5-E5C2-4A6D-8B88-6BB02EC42D8E}
+DEFINE_GUID(GUID_XENBUS_GNTTAB_INTERFACE, 
+0x763679c5, 0xe5c2, 0x4a6d, 0x8b, 0x88, 0x6b, 0xb0, 0x2e, 0xc4, 0x2d, 0x8e);
 
-#define GNTTAB_OPERATIONS(_Interface) \
-        (PXENBUS_GNTTAB_OPERATIONS *)((ULONG_PTR)(_Interface))
+struct _XENBUS_GNTTAB_INTERFACE_V1 {
+    INTERFACE                           Interface;
+    XENBUS_GNTTAB_ACQUIRE               GnttabAcquire;
+    XENBUS_GNTTAB_RELEASE               GnttabRelease;
+    XENBUS_GNTTAB_CREATE_CACHE          GnttabCreateCache;
+    XENBUS_GNTTAB_PERMIT_FOREIGN_ACCESS GnttabPermitForeignAccess;
+    XENBUS_GNTTAB_REVOKE_FOREIGN_ACCESS GnttabRevokeForeignAccess;
+    XENBUS_GNTTAB_GET_REFERENCE         GnttabGetReference;
+    XENBUS_GNTTAB_DESTROY_CACHE         GnttabDestroyCache;
+};
 
-#define GNTTAB_CONTEXT(_Interface) \
-        (PXENBUS_GNTTAB_CONTEXT *)((ULONG_PTR)(_Interface) + sizeof (PVOID))
+typedef struct _XENBUS_GNTTAB_INTERFACE_V1 XENBUS_GNTTAB_INTERFACE, *PXENBUS_GNTTAB_INTERFACE;
 
-#define GNTTAB(_Operation, _Interface, ...) \
-        (*GNTTAB_OPERATIONS(_Interface))->GNTTAB_ ## _Operation((*GNTTAB_CONTEXT(_Interface)), __VA_ARGS__)
+#define XENBUS_GNTTAB(_Method, _Interface, ...)    \
+    (_Interface)->Gnttab ## _Method((PINTERFACE)(_Interface), __VA_ARGS__)
+
+#endif  // _WINDLL
+
+#define XENBUS_GNTTAB_INTERFACE_VERSION_MIN 1
+#define XENBUS_GNTTAB_INTERFACE_VERSION_MAX 1
 
 #endif  // _XENBUS_GNTTAB_INTERFACE_H
 

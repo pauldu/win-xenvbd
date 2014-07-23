@@ -131,9 +131,9 @@ QueueDebugCallback(
     __in PXENBUS_DEBUG_CALLBACK         Callback
     )
 {
-    DEBUG(Printf, Debug, Callback,
-            "QUEUE: %s : %u / %u\n",
-            Name, Queue->Current, Queue->Maximum);
+    XENBUS_DEBUG(Printf, Debug, Callback,
+                 "QUEUE: %s : %u / %u\n",
+                 Name, Queue->Current, Queue->Maximum);
 
     Queue->Maximum = Queue->Current;
 }
